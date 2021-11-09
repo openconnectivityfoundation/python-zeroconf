@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union, cast
 
 from .._dns import DNSAddress, DNSPointer, DNSQuestionType, DNSRecord, DNSService, DNSText
 from .._exceptions import BadTypeInNameException
-from .._logger import log
 from .._protocol.outgoing import DNSOutgoing
 from .._updates import RecordUpdate, RecordUpdateListener
 from .._utils.asyncio import get_running_loop, run_coro_with_timeout
@@ -105,6 +104,7 @@ class ServiceInfo(RecordUpdateListener):
         self,
         type_: str,
         name: str,
+        subtypes_: Optional[List[str]] = None,
         port: Optional[int] = None,
         weight: int = 0,
         priority: int = 0,
@@ -123,14 +123,22 @@ class ServiceInfo(RecordUpdateListener):
         if not type_.endswith(service_type_name(name, strict=False)):
             raise BadTypeInNameException
         self.type = type_
+        self.subtypes_ = []
         self._name = name
         self.key = name.lower()
-        self._ipv4_addresses: List[ipaddress.IPv4Address] = []
-        self._ipv6_addresses: List[ipaddress.IPv6Address] = []
         if addresses is not None:
-            self.addresses = addresses
+            self._addresses = addresses
         elif parsed_addresses is not None:
-            self.addresses = [_encode_address(a) for a in parsed_addresses]
+            self._addresses = [_encode_address(a) for a in parsed_addresses]
+        else:
+            self._addresses = []
+        # This results in an ugly error when registering, better check now
+        invalid = [a for a in self._addresses if not isinstance(a, bytes) or len(a) not in (4, 16)]
+        if invalid:
+            raise TypeError(
+                'Addresses must be bytes, got %s. Hint: convert string addresses '
+                'with socket.inet_pton' % invalid
+            )
         self.port = port
         self.weight = weight
         self.priority = priority
@@ -156,6 +164,12 @@ class ServiceInfo(RecordUpdateListener):
         self._name = name
         self.key = name.lower()
 
+    def subtypes(self) -> List:
+        return self.subtypes_
+
+    def addsubtype(self, subtype: str) -> None:
+        self.subtypes_.append(subtype)
+
     @property
     def addresses(self) -> List[bytes]:
         """IPv4 addresses of this service.
@@ -172,21 +186,7 @@ class ServiceInfo(RecordUpdateListener):
 
         This replaces all currently stored addresses, both IPv4 and IPv6.
         """
-        self._ipv4_addresses.clear()
-        self._ipv6_addresses.clear()
-
-        for address in value:
-            try:
-                addr = ipaddress.ip_address(address)
-            except ValueError:
-                raise TypeError(
-                    "Addresses must either be IPv4 or IPv6 strings, bytes, or integers;"
-                    f" got {address}. Hint: convert string addresses with socket.inet_pton"  # type: ignore
-                )
-            if addr.version == 4:
-                self._ipv4_addresses.append(addr)
-            else:
-                self._ipv6_addresses.append(addr)
+        self._addresses = value
 
     @property
     def properties(self) -> Dict:
@@ -202,13 +202,10 @@ class ServiceInfo(RecordUpdateListener):
     def addresses_by_version(self, version: IPVersion) -> List[bytes]:
         """List addresses matching IP version."""
         if version == IPVersion.V4Only:
-            return [addr.packed for addr in self._ipv4_addresses]
+            return [addr for addr in self._addresses if not _is_v6_address(addr)]
         if version == IPVersion.V6Only:
-            return [addr.packed for addr in self._ipv6_addresses]
-        return [
-            *(addr.packed for addr in self._ipv4_addresses),
-            *(addr.packed for addr in self._ipv6_addresses),
-        ]
+            return list(filter(_is_v6_address, self._addresses))
+        return self._addresses
 
     def parsed_addresses(self, version: IPVersion = IPVersion.All) -> List[str]:
         """List addresses in their parsed string form."""
@@ -231,7 +228,7 @@ class ServiceInfo(RecordUpdateListener):
 
         ll_addrs = list(filter(is_link_local, self.parsed_addresses(version)))
         other_addrs = list(filter(lambda addr: not is_link_local(addr), self.parsed_addresses(version)))
-        return [f"{addr}%{self.interface_index}" for addr in ll_addrs] + other_addrs
+        return ["{}%{}".format(addr, self.interface_index) for addr in ll_addrs] + other_addrs
 
     def _set_properties(self, properties: Dict) -> None:
         """Sets properties and text of this info from a dictionary"""
@@ -326,20 +323,9 @@ class ServiceInfo(RecordUpdateListener):
             return
 
         if isinstance(record, DNSAddress):
-            if record.key != self.server_key:
-                return
-            try:
-                ip_addr = ipaddress.ip_address(record.address)
-            except ValueError as ex:
-                log.warning("Encountered invalid address while processing %s: %s", record, ex)
-                return
-            if ip_addr.version == 4:
-                if ip_addr not in self._ipv4_addresses:
-                    self._ipv4_addresses.insert(0, ip_addr)
-                return
-            if ip_addr not in self._ipv6_addresses:
-                self._ipv6_addresses.insert(0, ip_addr)
-                if ip_addr.is_link_local:
+            if record.key == self.server_key and record.address not in self._addresses:
+                self._addresses.append(record.address)
+                if record.type is _TYPE_AAAA and ipaddress.IPv6Address(record.address).is_link_local:
                     self.interface_index = record.scope_id
             return
 
@@ -387,6 +373,22 @@ class ServiceInfo(RecordUpdateListener):
             self.name,
             created,
         )
+
+    def dns_pointer_subtypes(self, override_ttl: Optional[int] = None, created: Optional[float] = None) -> List:
+        returnList = []
+        for subtype in self.subtypes_:
+            full_subtype = "%s.%s" % (subtype, self.type)
+            returnList.append(
+                DNSPointer(
+                    full_subtype,
+                    _TYPE_PTR,
+                    _CLASS_IN,
+                    override_ttl if override_ttl is not None else self.other_ttl,
+                    self.name,
+                    created,
+                )
+            )
+        return returnList
 
     def dns_service(self, override_ttl: Optional[int] = None, created: Optional[float] = None) -> DNSService:
         """Return DNSService from ServiceInfo."""
@@ -444,7 +446,7 @@ class ServiceInfo(RecordUpdateListener):
     @property
     def _is_complete(self) -> bool:
         """The ServiceInfo has all expected properties."""
-        return bool(self.text is not None and (self._ipv4_addresses or self._ipv6_addresses))
+        return not (self.text is None or not self._addresses)
 
     def request(
         self, zc: 'Zeroconf', timeout: float, question_type: Optional[DNSQuestionType] = None
@@ -516,10 +518,10 @@ class ServiceInfo(RecordUpdateListener):
 
     def __repr__(self) -> str:
         """String representation"""
-        return '{}({})'.format(
+        return '%s(%s)' % (
             type(self).__name__,
             ', '.join(
-                '{}={!r}'.format(name, getattr(self, name))
+                '%s=%r' % (name, getattr(self, name))
                 for name in (
                     'type',
                     'name',
