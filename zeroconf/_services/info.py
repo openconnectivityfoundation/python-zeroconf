@@ -105,6 +105,7 @@ class ServiceInfo(RecordUpdateListener):
         self,
         type_: str,
         name: str,
+        subtypes_: Optional[List[str]] = None,
         port: Optional[int] = None,
         weight: int = 0,
         priority: int = 0,
@@ -123,6 +124,7 @@ class ServiceInfo(RecordUpdateListener):
         if not type_.endswith(service_type_name(name, strict=False)):
             raise BadTypeInNameException
         self.type = type_
+        self.subtypes_ = []
         self._name = name
         self.key = name.lower()
         self._ipv4_addresses: List[ipaddress.IPv4Address] = []
@@ -156,6 +158,12 @@ class ServiceInfo(RecordUpdateListener):
         self._name = name
         self.key = name.lower()
 
+    def subtypes(self) -> List:
+        return self.subtypes_
+
+    def addsubtype(self, subtype: str) -> None:
+        self.subtypes_.append(subtype)
+        
     @property
     def addresses(self) -> List[bytes]:
         """IPv4 addresses of this service.
@@ -387,6 +395,22 @@ class ServiceInfo(RecordUpdateListener):
             self.name,
             created,
         )
+
+    def dns_pointer_subtypes(self, override_ttl: Optional[int] = None, created: Optional[float] = None) -> List:
+        returnList = []
+        for subtype in self.subtypes_:
+            full_subtype = "%s.%s" % (subtype, self.type)
+            returnList.append(
+                DNSPointer(
+                    full_subtype,
+                    _TYPE_PTR,
+                    _CLASS_IN,
+                    override_ttl if override_ttl is not None else self.other_ttl,
+                    self.name,
+                    created,
+                )
+            )
+        return returnList
 
     def dns_service(self, override_ttl: Optional[int] = None, created: Optional[float] = None) -> DNSService:
         """Return DNSService from ServiceInfo."""
