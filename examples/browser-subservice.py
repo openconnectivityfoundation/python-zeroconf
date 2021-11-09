@@ -47,11 +47,6 @@ def on_service_state_change(
             print(f"  Server: {info.server}")
             print("  Addresses: %s" % ", ".join(addresses))
 
-        else:
-            print("  No info")
-        print('\n')
-
-
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
 
@@ -74,7 +69,7 @@ if __name__ == '__main__':
 
     zeroconf = Zeroconf(ip_version=ip_version)
 
-    services = ["_ocfd._udp.local."]
+    services = ["_RToic.d.battery._sub._ocfd._udp.local."]
     if args.find:
         services = list(ZeroconfServiceTypes.find(zc=zeroconf))
 
