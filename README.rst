@@ -1,20 +1,14 @@
 python-zeroconf
 ===============
 
-.. image:: https://github.com/jstasiak/python-zeroconf/workflows/CI/badge.svg
-   :target: https://github.com/jstasiak/python-zeroconf?query=workflow%3ACI+branch%3Amaster
-
-.. image:: https://img.shields.io/pypi/v/zeroconf.svg
-    :target: https://pypi.python.org/pypi/zeroconf
-
-.. image:: https://codecov.io/gh/jstasiak/python-zeroconf/branch/master/graph/badge.svg
-   :target: https://codecov.io/gh/jstasiak/python-zeroconf
-
 `Documentation <https://python-zeroconf.readthedocs.io/en/latest/>`_.
     
-This is fork of pyzeroconf, Multicast DNS Service Discovery for Python,
+This is fork of a fork of pyzeroconf, Multicast DNS Service Discovery for Python,
 originally by Paul Scott-Murphy (https://github.com/paulsm/pyzeroconf),
-modified by William McBrine (https://github.com/wmcbrine/pyzeroconf).
+modified by William McBrine (https://github.com/wmcbrine/pyzeroconf), 
+then further modified by Jakub Stasiak (https://github.com/jstasiak/python-zeroconf). 
+
+The following is the note from Jakub Stasiak's fork. 
 
 The original William McBrine's fork note::
 
